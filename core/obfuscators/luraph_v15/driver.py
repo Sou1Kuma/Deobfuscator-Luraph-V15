@@ -110,6 +110,11 @@ def devirtualize(job, ppath, dpath, cfg, rerun, chunk_paths=(), live=None):
             print("[*]   %d functions, %d unlifted blocks, %d unstructured jumps, %d new constant requests (%.1fs)"
                   % (stats["functions"], stats["errors"], stats["fallbacks"], len(new), time.time() - t1),
                   file=sys.stderr)
+            if rnd == 1 and stats["functions"] == 0:
+                raise SystemExit("[!] this build uses a VM layout the lifter cannot read "
+                                 "(no closure makers / dispatchers found; likely a method-based "
+                                 "state-machine VM). Only the behaviour trace is available; run "
+                                 "with --no-devirt to skip the lift attempt.")
             if (not new and devirt.same_patches(last_bufs, bufs)) or rnd == rounds:
                 break
             if quick:

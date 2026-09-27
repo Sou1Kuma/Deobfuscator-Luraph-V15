@@ -519,7 +519,7 @@ class VMModel:
 
     def maker_args(self, vmobj, proto, upvals):
         n = len(self.maker["args"])
-        vals = [None] * max(n, 3)
+        vals = [None] * max(n, 3, self.proto_index() + 1, self.upvals_index() + 1)
         vals[0], vals[self.proto_index()], vals[self.upvals_index()] = vmobj, proto, upvals
         return vals
 
