@@ -286,6 +286,7 @@ def closure_makers(root):
                     st = st[-1] if st else None
                     if st and st["type"] == "AstStatAssign":
                         for v, e in zip(st["vars"], st["values"]):
+                            e = unwrap_group(e)
                             if e is clo and local_name(v):
                                 _, _, l2, c2 = loc(st)
                                 seen[(l2, c2)] = (local_name(v), stack[oi]["args"][1]["name"])
@@ -300,6 +301,14 @@ def closure_makers(root):
 def decl_key(local):
     """Identity of a local: its declaration location."""
     return local["location"]
+
+def unwrap_group(e):
+    """Luraph sometimes writes the VM closure as `(function(...) ... end)`.
+    The AST keeps the parentheses as an AstExprGroup, so identity checks
+    against the closure node must look through them."""
+    while isinstance(e, dict) and e.get("type") == "AstExprGroup":
+        e = e.get("expr")
+    return e
 
 def maker_info(root, disp=None):
     disp_nodes = {id(d["node"]) for d in (disp if disp is not None else find_dispatchers(root))}
@@ -324,6 +333,7 @@ def maker_info(root, disp=None):
                     st = st[-1] if st else None
                     if st and st["type"] == "AstStatAssign":
                         for v, e in zip(st["vars"], st["values"]):
+                            e = unwrap_group(e)
                             if e is clo and local_name(v):
                                 _, _, l2, c2 = loc(st)
                                 if (l2, c2) not in out:

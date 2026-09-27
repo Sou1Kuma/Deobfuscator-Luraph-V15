@@ -41,6 +41,11 @@ function localName(expr) {
   return null;
 }
 
+function unwrapGroup(e) {
+  while (e && e.type === 'AstExprGroup') e = e.expr;
+  return e;
+}
+
 const OPS = {
   CompareLt: (a, b) => a < b,
   CompareLe: (a, b) => a <= b,
@@ -247,7 +252,7 @@ function makerInfo(root) {
         const st = makerStmts[makerStmts.length - 1];
         if (st && st.type === 'AstStatAssign') {
           (st.vars || []).forEach((v, idx) => {
-            const e = (st.values || [])[idx];
+            const e = unwrapGroup((st.values || [])[idx]);
             if (e === clo && localName(v)) {
               const [, , l2, c2] = loc(st);
               const key = `${l2},${c2}`;
@@ -317,6 +322,7 @@ function patchSpin(src) {
 
 module.exports = {
   loadAst, loc, textOf, walkAst, localName,
+  unwrapGroup,
   findDispatchers, resolveOp, evalCond,
   closureEntries, makerInfo, patchEntries, patchSpin,
 };
