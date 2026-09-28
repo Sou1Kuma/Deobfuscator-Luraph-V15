@@ -159,6 +159,7 @@ function _makerParams(maker) {
     pi = 1;
     const kc = cands.filter(i => kcounts[args[i]?.location]);
     if (kc.length) pi = kc.reduce((best, i) => (kcounts[args[i].location] > kcounts[args[best].location] ? i : best), kc[0]);
+    else if (kcounts[args[0]?.location] && !args.slice(1).some(a => kcounts[a?.location])) pi = 0;
   }
   const others = Object.values(visible).filter(i => i !== 0 && i !== pi && used.has(args[i]?.location)).sort();
   const ui = others.length ? others[0] : pi + 1;

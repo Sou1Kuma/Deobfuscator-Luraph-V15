@@ -401,6 +401,9 @@ def _maker_params(maker):
         kc = [i for i in cands if kcounts.get(args[i]["location"])]
         if kc:
             pi = max(kc, key=lambda i: kcounts[args[i]["location"]])
+        elif kcounts.get(args[0]["location"]) and \
+                not any(kcounts.get(a["location"]) for a in args[1:]):
+            pi = 0
     others = sorted(i for i in visible.values() if i not in (0, pi) and args[i]["location"] in used)
     ui = others[0] if others else pi + 1
     return pi, ui

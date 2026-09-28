@@ -524,8 +524,8 @@ class VMModel:
         return vals
 
     def proto_of(self, cap):
-        p = cap.get("self")
-        return p if p is not None else cap.get(self.maker["args"][self.proto_index()]["name"])
+        p = cap.get(self.maker["args"][self.proto_index()]["name"])
+        return p if p is not None else cap.get("self")
 
     def vmobj_of(self, cap):
         return cap.get(self.maker["args"][0]["name"])
@@ -561,6 +561,211 @@ def find_ctor_funcs(root):
             elif it["kind"] == "general" and it["key"]["type"] == "AstExprConstantString":
                 out.setdefault(it["key"]["value"].encode("latin-1"), it["value"])
     return out
+
+LIBS = ("bit32", "string", "table", "math", "buffer", "utf8", "coroutine", "os", "task")
+
+def _builtin_chain(e, top=None):
+    """`bit32.band`-style chained index -> a Builtin name. The chain root is
+    either a library global or a local bound to the VM's top-level object
+    table (`C.I`, `C._.format`, ...), whose aliases are followed in `top`."""
+    names = []
+    root = None
+    e = vmmap.unwrap_group(e)
+    while isinstance(e, dict):
+        t = e.get("type")
+        if t == "AstExprIndexName":
+            names.append(e["index"])
+            e = e["expr"]
+        elif t == "AstExprIndexExpr" and e["index"].get("type") == "AstExprConstantString":
+            names.append(e["index"]["value"])
+            e = e["expr"]
+        elif t == "AstExprGlobal":
+            root = ("global", e["global"])
+            break
+        elif t == "AstExprLocal":
+            root = ("local", vmmap.decl_key(e["local"]))
+            break
+        else:
+            return None
+    if root is None:
+        return None
+    names.reverse()
+    kind, rk = root
+    if kind == "global":
+        name = ".".join([rk] + names)
+        return name if name in S.CONCRETE or rk in LIBS else None
+    v = top.get(rk) if isinstance(top, dict) else None
+    if v is None:
+        return None
+    for nm in names:
+        v = v.get(nm) if isinstance(v, dict) else None
+        if v is None:
+            return None
+    return v if isinstance(v, str) else None
+
+def _top_table(root):
+    """The VM's top-level object table (`return({...})(...)`): for every field
+    a resolution entry -- a builtin alias name, a lib-table dict, or None for
+    methods. -> ({decl_key of nothing: dict} irrelevant here) the dict mapping
+    its own field names, or None."""
+    best, best_n = None, 0
+    for n in iter_nodes(root):
+        if isinstance(n, dict) and n.get("type") == "AstExprTable":
+            fns = sum(1 for it in n["items"] if it["value"]["type"] == "AstExprFunction")
+            if fns > best_n:
+                best, best_n = n, fns
+    if best is None or best_n < 4:
+        return None
+
+    def field(v):
+        v = vmmap.unwrap_group(v)
+        t = v.get("type")
+        if t == "AstExprFunction":
+            return None
+        if t == "AstExprTable":
+            out = {}
+            for it in v["items"]:
+                if it["kind"] == "record" and it["value"].get("type") != "AstExprFunction":
+                    out[it["key"]["value"]] = field(it["value"])
+            return out or None
+        nm = _builtin_chain(v)
+        if nm:
+            return nm
+        return None
+
+    out = {}
+    for it in best["items"]:
+        if it["kind"] != "record":
+            continue
+        out[it["key"]["value"]] = field(it["value"])
+    return out or None
+
+def _bind_value(v, env):
+    """A static value for a helper-table entry: functions bind to their AST
+    nodes, library chains become Builtins, table constructors recurse."""
+    v = vmmap.unwrap_group(v)
+    t = v.get("type")
+    if t == "AstExprFunction":
+        return LuaFunc(v, env)
+    if t == "AstExprTable":
+        tab = LTable()
+        pos = 0
+        for it in v["items"]:
+            val = it["value"]
+            if it["kind"] == "item":
+                pos += 1
+                x = _bind_value(val, env)
+                if x is not None:
+                    tab.set(pos, x)
+            elif it["kind"] == "record":
+                x = _bind_value(val, env)
+                if x is not None:
+                    tab.set(it["key"]["value"].encode("latin-1"), x)
+            elif it["kind"] == "general":
+                k = it["key"]
+                if k.get("type") == "AstExprConstantNumber":
+                    x = _bind_value(val, env)
+                    if x is not None:
+                        tab.set(S.fix_int(k["value"]), x)
+                elif k.get("type") == "AstExprConstantString":
+                    x = _bind_value(val, env)
+                    if x is not None:
+                        tab.set(k["value"].encode("latin-1"), x)
+        return tab
+    name = _builtin_chain(v, getattr(_bind_value, "_top", None))
+    if name is None:
+        return None
+    if "." not in name and name in LIBS:
+        lib = LTable()
+        for nm in list(S.CONCRETE):
+            if nm.startswith(name + "."):
+                lib.set(nm.split(".", 1)[1].encode("latin-1"), Builtin(nm))
+        return lib
+    return Builtin(name)
+
+def _free_env(root, info):
+    """Statically resolve the maker's free locals. This variant keeps the VM's
+    helpers in a runtime-built table (Y), a parameter of the enclosing method
+    instead of a ctor-table argument. Every method that names a parameter Y
+    fills the same runtime table (the keys never collide), so all
+    `Y[k1][k2]... = v` assignments in the file merge into one LTable; chained
+    values resolve through the top-level object table (`C.I` = string.sub).
+    -> Scope keyed by the free locals' declaration locations, or None."""
+    maker = info["maker"]
+    decls = vmmap._decls_in(maker)
+    free = {}
+    stack = [info["vm"]]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, dict):
+            if n.get("type") == "AstExprLocal":
+                k = vmmap.decl_key(n["local"])
+                if k not in decls:
+                    free.setdefault(k, n["local"]["name"])
+            stack.extend(n.values())
+        elif isinstance(n, list):
+            stack.extend(n)
+    if not free:
+        return None
+    top = _top_table(root)
+    _bind_value._top = top
+    names = set(free.values())
+    hits = []
+    for n in iter_nodes(root):
+        if not (isinstance(n, dict) and n.get("type") == "AstStatAssign"):
+            continue
+        for var, val in zip(n["vars"], n["values"]):
+            path = []
+            e = vmmap.unwrap_group(var)
+            while isinstance(e, dict) and e.get("type") == "AstExprIndexExpr":
+                ix = e["index"]
+                if ix.get("type") == "AstExprConstantNumber":
+                    path.append(S.fix_int(ix["value"]))
+                elif ix.get("type") == "AstExprConstantString":
+                    path.append(ix["value"].encode("latin-1"))
+                else:
+                    path = None
+                    break
+                e = vmmap.unwrap_group(e["expr"])
+            if not path or not isinstance(e, dict) or e.get("type") != "AstExprLocal" \
+                    or e["local"]["name"] not in names:
+                continue
+            hits.append((vmmap.loc(n), path[::-1], val))
+    env = Scope()
+    helper = LTable()
+    for (l1, c1, _, _), path, val in sorted(hits):
+        tab = helper
+        for k in path[:-1]:
+            nxt = tab.h.get(S.norm_key(k))
+            if not isinstance(nxt, LTable):
+                nxt = LTable()
+                tab.set(k, nxt)
+            tab = nxt
+        key = path[-1]
+        if val.get("type") == "AstExprConstantNil":
+            tab.h.pop(S.norm_key(key), None)
+            continue
+        v = _bind_value(val, env)
+        if v is not None:
+            tab.set(key, v)
+    if helper.h:
+        for k, name in free.items():
+            if name in ("Y", "y") and name in names:
+                env.vars[k] = helper
+                break
+    top_ltab = None
+    if top is not None:
+        for n in iter_nodes(root):
+            if isinstance(n, dict) and n.get("type") == "AstExprTable":
+                fns = sum(1 for it in n["items"] if it["value"]["type"] == "AstExprFunction")
+                if fns >= 4:
+                    top_ltab = _bind_value(n, env)
+                    break
+    if top_ltab is not None:
+        for k, name in free.items():
+            if name == "C":
+                env.vars[k] = top_ltab
+    return env if env.vars else None
 
 class VMCrash(Unsupported):
     pass
@@ -692,7 +897,8 @@ class ProtoLifter:
 
         it = S.Interp(self)
         self.making = True
-        r = it.call_lua(LuaFunc(vm.maker, Scope()), Multi(vm.maker_args(vmobj, proto, upvals)))
+        env = getattr(vm, "free_env", None) or Scope()
+        r = it.call_lua(LuaFunc(vm.maker, env), Multi(vm.maker_args(vmobj, proto, upvals)))
         self.making = False
         f = r.first() if isinstance(r, Multi) else r
         if not isinstance(f, LuaFunc) or f.node is not vm.vm:
@@ -1492,7 +1698,8 @@ class ProtoLifter:
 
             tt = self.new_temp()
             self.emit(CallStmt(tt, Global("table.unpack"),
-                               Multi([self.value_of(x) if x is not None else Const(None) for x in a.items], a.tail)))
+                               Multi([self.value_of(x) if not isinstance(x, SymList) else x
+                                         for x in a.items], a.tail)))
             return Multi([], TempTail(tt))
         raise Unsupported("unpack %r" % (t,))
 
@@ -2524,11 +2731,11 @@ class JitStepper(Stepper):
         lf.tcount = 0
         lf.temp_prefix = tprefix
         lf.mutated = False
-        lf.jvals = dict(state.jregs)
+        lf.jvals = dict(state.jregs) if state is not None else {}
         lf.jread = set()
         lf.ov_base = self.gov
         lf.ov = None
-        lf.packs = dict(state.packs)
+        lf.packs = dict(state.packs) if state is not None else {}
         lf.pack_copies = {}
         lf.pack_read = set()
         it = S.Interp(lf)
@@ -2622,7 +2829,7 @@ def make_stepper(vm, lifter):
 
 def build_tree(paths, d, start):
     """paths share decisions[:d]; statements before `start` were emitted already."""
-    if len(paths) == 1 and len(paths[0][0]) <= d:
+    if len(paths) == 1 and len(paths[0]) <= d:
         taken, dlog, out, oc = paths[0]
         return Node(out[start:], outcome=oc)
 
@@ -2667,8 +2874,10 @@ def analyze_source(path):
         ids = {id(n) for n in iter_nodes(vm_node)}
         inside = [d["node"] for d in disp if id(d["node"]) in ids]
         tag = "%s@%d,%d" % ((key,) + tuple(info["at"]))
-        vms[tag] = VMModel(info, inside, ctor)
-        vms[tag].tag = tag
+        vm = VMModel(info, inside, ctor)
+        vm.tag = tag
+        vm.free_env = _free_env(root, info)
+        vms[tag] = vm
 
     for k, node in ctor.items():
         parts = jit_maker_parts(node)
