@@ -269,3 +269,18 @@ This project is open-source under the [MIT License](LICENSE).
 ## Credits
 Thanks source to **ccjvwsod** on Discord
 This version was rebuilt by me using Node so that multiple Deobf instances can run simultaneously
+
+---
+
+## Support The Project
+
+If this tool saved you time, consider buying me a coffee. Every donation keeps
+the updates coming (new obfuscator versions, faster lifts, better structuring).
+
+**Bitcoin (BTC)**
+
+![Bitcoin](btc.jpg)
+
+**Ethereum (ETH)**
+
+![Ethereum](ether.jpg)

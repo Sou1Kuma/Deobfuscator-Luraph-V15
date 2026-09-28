@@ -51,7 +51,9 @@ class NilIndex(Missing):
 
 def _interp_patches():
     """`nil[key]` reads and reads of locals the maker never bound stay
-    symbolic; nil arithmetic routes through the lifter's symbolic binop."""
+    symbolic; nil arithmetic routes through the lifter's symbolic binop; a
+    numeric for whose bounds come from an unresolved helper is skipped
+    rather than crashing the walk."""
     if getattr(S.Interp, "_v14_nil_index_patch", False):
         return
     orig_eval = S.Interp.eval
@@ -87,6 +89,21 @@ def _interp_patches():
         return orig_binop(self, op, a, b)
     S.Interp.binop = binop_
     S.Interp._v14_nil_arith_patch = True
+
+    orig_exec_stmt = S.Interp.exec_stmt
+
+    def exec_stmt_(self, st, scope):
+        if st.get("type") == "AstStatFor":
+            try:
+                a = self.eval(st["from"], scope)
+                b = self.eval(st["to"], scope)
+                c = self.eval(st["step"], scope) if st.get("step") else 1
+            except S.Unsupported:
+                raise
+            if a is None or b is None or c is None:
+                return
+        return orig_exec_stmt(self, st, scope)
+    S.Interp.exec_stmt = exec_stmt_
 
 
 _interp_patches()
@@ -279,7 +296,18 @@ def _call_symbolic(self, fn, args, it, stat):
             return Multi([c])
     try:
         return _lf_call_symbolic(self, fn, args, it, stat)
-    except Unsupported:
+    except Unsupported as ex:
+        if isinstance(fn, OpaqueFn) and fn.node is None \
+                and str(ex).startswith("call of unknown VM function"):
+            # a v14 runtime helper closure with no recoverable body: keep the
+            # call as a SharedFn stub so one opaque helper cannot abort the
+            # whole payload lift
+            fe = self.as_expr(fn)
+            t = self.new_temp()
+            self.emit(ir.CallStmt(t, fe,
+                                  Multi([self.value_of(x) if not isinstance(x, S.SymList) else x
+                                         for x in args.items], args.tail)))
+            return Multi([], TempTail(t))
         if isinstance(fn, OpaqueFn) and getattr(fn, "node", None) is not None:
             native = _native_opaque_fn(self, fn)
             if native is not None:
