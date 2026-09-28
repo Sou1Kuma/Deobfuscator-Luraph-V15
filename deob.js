@@ -170,7 +170,7 @@ async function processFile(absInput, args) {
     job.sourcePath = sourcePath;
 
     let result;
-    if (plugin.name === 'luraph_v15') {
+    if (plugin.name === 'luraph_v15' || plugin.name === 'luraph_v14') {
       result = await driver.run(job);
     } else {
       result = await driver.runGeneric(job);

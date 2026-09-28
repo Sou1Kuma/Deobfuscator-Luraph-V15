@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const vmmap = require('./vmmap');
+const vmmap14 = require('./vmmap14');
 const harness = require('./harness');
 const trace = require('./traceout');
 const tidy = require('./tidy');
@@ -10,11 +11,15 @@ const devirt = require('./devirt');
 
 const SPIN_CHECKS = 24;
 
-function patchChunk(src, tmpdir, chunkTag) {
+function mapperFor(job) {
+  return job.obfuscator && job.obfuscator.includes('v14') ? vmmap14 : vmmap;
+}
+
+function patchChunk(job, src, tmpdir, chunkTag) {
   const p = path.join(tmpdir, `_chunk_${harness.chunkKey(src)}.luau`);
   fs.writeFileSync(p, src, 'latin1');
   try {
-    return vmmap.patchEntries(src, p, chunkTag);
+    return mapperFor(job).patchEntries(src, p, chunkTag);
   } catch (e) {
     process.stderr.write(`[!] could not instrument chunk (${e.message})\n`);
     return src;
@@ -28,16 +33,18 @@ async function run(job) {
   const devirtOn = !args.noDevirt;
   let source = job.source;
 
+  const mapper = mapperFor(job);
+  if (job.obfuscator && job.obfuscator.includes('v14')) process.env.DEOB_ENGINE = 'v14';
   let patched;
   try {
-    patched = args.noHooks ? source : vmmap.patchEntries(source, job.sourcePath, harness.chunkKey(source));
+    patched = args.noHooks ? source : mapper.patchEntries(source, job.sourcePath, harness.chunkKey(source));
   } catch (e) {
     process.stderr.write(`[!] AST parse failed: ${e.message}\n`);
     throw e;
   }
 
   let spin = true;
-  if (spin) patched = vmmap.patchSpin(patched);
+  if (spin) patched = mapper.patchSpin(patched);
 
   const cachePath = harness.loadP2dCache(job.input);
   const runner = new harness.Runner(job);
@@ -78,8 +85,8 @@ async function run(job) {
     for (const [key, src] of found) {
       if (!chunks[key]) {
         rawChunks[key] = src;
-        chunks[key] = patchChunk(src, job.outdir, key);
-        if (spin) chunks[key] = vmmap.patchSpin(chunks[key]);
+        chunks[key] = patchChunk(job, src, job.outdir, key);
+        if (spin) chunks[key] = mapper.patchSpin(chunks[key]);
         added++;
       }
     }

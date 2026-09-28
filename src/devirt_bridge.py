@@ -8,7 +8,15 @@ if CORE_DIR not in sys.path:
     sys.path.insert(0, CORE_DIR)
 
 from backend import run_big_stack
-from obfuscators.luraph_v15 import devirt
+
+
+def engine_for(obfuscator="", env=None):
+    if "v14" in obfuscator or (env or os.environ).get("DEOB_ENGINE") == "v14":
+        from obfuscators.luraph_v14 import devirt
+        return devirt
+    from obfuscators.luraph_v15 import devirt
+    return devirt
+
 
 cmd = sys.argv[1]
 
@@ -16,6 +24,7 @@ if cmd == "collect":
     source_path = sys.argv[2]
     protos_path = sys.argv[3]
     chunk_paths = sys.argv[4:]
+    devirt = engine_for()
     stats, reqs, bufs = run_big_stack(
         devirt.collect_requests, source_path, protos_path, chunk_paths
     )
@@ -33,8 +42,11 @@ elif cmd == "pipeline":
         c = json.load(f)
 
     from obfuscators.base import Job
-    from obfuscators.luraph_v15 import driver
     import harness
+    if "v14" in (c.get("obfuscator") or ""):
+        from obfuscators.luraph_v14 import driver
+    else:
+        from obfuscators.luraph_v15 import driver
 
     class DummyArgs:
         def __init__(self, d):

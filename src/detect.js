@@ -19,6 +19,23 @@ function detectLuraph(source) {
 
 const HEADER_LINE_RE = /\s*--[ \t]*This file was protected using Luraph Obfuscator v[\d.]+[ \t]*\[https?:\/\/lura\.ph\/?\]/;
 
+function detectLuraph14(source) {
+  const head500 = source.slice(0, 500);
+  const m = LURAPH_HEADER.exec(head500);
+  if (!m) {
+    const head4k = source.trimStart().slice(0, 4000);
+    if (head4k.startsWith('return(function()') && /loadstring/.test(head4k)) return 0.8;
+    if (head4k.startsWith('return({') && /bit32|loadstring/.test(source.slice(0, 100000))) return 0.8;
+    if (head4k.startsWith('local init = (function(...') && source.includes('return({')) return 0.4;
+    return 0.0;
+  }
+  if (m[1] === '14') {
+    if (m[2] === '7' || m[2] === '8' || m[2] === '9') return 1.0;
+    return 0.5;
+  }
+  return 0.0;
+}
+
 function restoreHeaderNewline(source) {
   const m = HEADER_LINE_RE.exec(source);
   if (m) {
@@ -36,6 +53,11 @@ const PLUGINS = [
     name: 'luraph_v15',
     label: 'Luraph v15',
     detect: detectLuraph,
+  },
+  {
+    name: 'luraph_v14',
+    label: 'Luraph v14.x',
+    detect: detectLuraph14,
   },
 ];
 

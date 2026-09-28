@@ -11,7 +11,7 @@ const BIN = path.join(HERE, '..', 'bin');
 const LUAU_URL = 'https://github.com/luau-lang/luau/releases/latest/download/luau-windows.zip';
 
 const HEARTBEAT = 2;
-const STALL = 20;
+const STALL = 600;
 
 let _luauExe = null;
 function findLuau() {
