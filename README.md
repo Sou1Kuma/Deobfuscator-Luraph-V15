@@ -89,18 +89,31 @@ The deobfuscator operates across 5 stages:
 
 ---
 
-## Luraph v14.7 / v14.8 / v14.9 Support
+## Luraph v14.x Support (EXPERIMENTAL)
 
-Older Luraph builds are handled by a dedicated v14 engine that shares the v15
-core (trace harness, SCCP walk, structuring, codegen) and layers the v14
-quirks on top:
+Support for older Luraph builds is **experimental** and does not yet recover
+full source for every script. Honest status per version:
+
+| Version | Status |
+|---|---|
+| **v14.7** | Lifts real source for many scripts (verified on multiple samples, e.g. a full hub script recovered statement-for-statement). Some samples still fall back to the behaviour trace or hit parser limits. |
+| **v14.8** | Experimental. Detection and bytecode walking work; the lift often stops at runtime-built helper closures and falls back to the behaviour trace. |
+| **v14.9** | Experimental. Same as v14.8, plus 1-2 MB blob decodes that are slow in the emulator. Full source recovery is **not** guaranteed. |
+
+The v14 engine shares the v15 core (trace harness, SCCP walk, structuring,
+codegen) and layers the v14 quirks on top:
 
 - version detection from the header or the `return({...})` / `local init = (function(...` shapes;
-- VM chunk extraction: the bytecode VM lives inside a loadstring'd chunk, which is instrumented automatically on detection;
+- VM chunk extraction: for bytecode-wrapper samples the VM lives inside a loadstring'd chunk, which is captured and instrumented automatically (the first pass aborts right after the chunk dump instead of executing the raw VM);
 - dispatch loops of both shapes (`while true do local op=(ARR[pc]); ...` and v14.8/v14.9's `repeat ... until false`), with parenthesised and type-asserted opcode fetches;
-- closure factories whose prototype is maker argument 0, often installed inside an initializer whose locals the VM closes over (recovered from the `__venv` runtime captures);
+- closure factories whose prototype is maker argument 0, often installed inside an initializer whose locals the VM closes over (recovered from the `__venv` runtime captures where the initializer builds them statically);
 - flattened handler state that reads an unresolved table or does arithmetic on a missing value stays symbolic instead of aborting the walk;
 - native `LPH_NO_VIRTUALIZE` closures are preserved as Luau source with their upvalue bindings rebuilt.
+
+What is still missing for full v14.8/v14.9 source recovery: the runtime-built
+VM-object tables whose methods are re-indexed numerically at run time (e.g.
+`obj[54]`) are not yet bound back to their AST definitions, so those lifts
+abort and the behaviour trace is written instead.
 
 ```bash
 node deob.js sample/v14/v14.7/<sample>.lua -o out.lua
@@ -111,6 +124,12 @@ blob decode is slow in the emulator:
 
 ```bash
 node deob.js sample.lua --timeout 1200 --budget 1200 -o out.lua
+```
+
+Batch mode can process a folder with parallel jobs:
+
+```bash
+node deob.js sample/v14/v14.7 --jobs 4
 ```
 
 ## Quick Start
