@@ -289,7 +289,7 @@ the updates coming (new obfuscator versions, faster lifts, better structuring).
 ![Litecoin](ltc.jpg)
 
 **Tron (TRX)**
-![Tron](Tron.jpg)
+![Tron](tron.jpg)
 
 **Mb bank (cho ai ng việt muốn donate)**
 ![Mb bank](mbbank.jpg)
