@@ -89,6 +89,30 @@ The deobfuscator operates across 5 stages:
 
 ---
 
+## Luraph v14.7 / v14.8 / v14.9 Support
+
+Older Luraph builds are handled by a dedicated v14 engine that shares the v15
+core (trace harness, SCCP walk, structuring, codegen) and layers the v14
+quirks on top:
+
+- version detection from the header or the `return({...})` / `local init = (function(...` shapes;
+- VM chunk extraction: the bytecode VM lives inside a loadstring'd chunk, which is instrumented automatically on detection;
+- dispatch loops of both shapes (`while true do local op=(ARR[pc]); ...` and v14.8/v14.9's `repeat ... until false`), with parenthesised and type-asserted opcode fetches;
+- closure factories whose prototype is maker argument 0, often installed inside an initializer whose locals the VM closes over (recovered from the `__venv` runtime captures);
+- flattened handler state that reads an unresolved table or does arithmetic on a missing value stays symbolic instead of aborting the walk;
+- native `LPH_NO_VIRTUALIZE` closures are preserved as Luau source with their upvalue bindings rebuilt.
+
+```bash
+node deob.js sample/v14/v14.7/<sample>.lua -o out.lua
+```
+
+Large v14.8/v14.9 samples (1-2 MB) need longer budgets because the bytecode
+blob decode is slow in the emulator:
+
+```bash
+node deob.js sample.lua --timeout 1200 --budget 1200 -o out.lua
+```
+
 ## Quick Start
 
 ### Prerequisites

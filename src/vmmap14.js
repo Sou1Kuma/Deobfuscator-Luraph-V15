@@ -349,7 +349,7 @@ function patchEntries(source, filePath, chunkTag) {
 
 function patchSpin(src) {
   return src.replace(
-    /while true do (?:local )?[A-Za-z_]+(?:,[A-Za-z_]+)*=\s*\(?[A-Za-z_]+\[[A-Za-z_]+\]\)?;/g,
+    /\b(?:while true do|repeat) (?:local )?[A-Za-z_]\w*(?:,[A-Za-z_]\w*)*=\s*\(\s*[A-Za-z_]\w*\[[A-Za-z_]\w*\]\s*\)\s*;|\bwhile true do (?:local )?[A-Za-z_]\w*(?:,[A-Za-z_]\w*)*=\s*[A-Za-z_]\w*\[[A-Za-z_]\w*\]\s*;/g,
     (m) => m + '__SPIN.n=__SPIN.n+1;if __SPIN.n>=__SPIN.step then __SPIN.f()end;'
   );
 }
