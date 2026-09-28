@@ -7,7 +7,7 @@ const KEYWORDS = new Set([
 
 function stripMarkers(text) {
 
-  return text.replace(/--@\S*\n?/g, '');
+  return text.replace(/^[^\S\n]*--@\d+[^\n]*\n?/gm, '');
 }
 
 function stripPreamble(text) {
