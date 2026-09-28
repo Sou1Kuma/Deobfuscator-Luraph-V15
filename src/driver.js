@@ -57,8 +57,17 @@ async function run(job) {
   let cfg = null;
 
   for (let attempt = 1; attempt <= args.maxRuns; attempt++) {
+    // Before any chunk is known, a v14 payload VM runs uninstrumented and
+    // silently for minutes; cap that first pass so envlog aborts right after
+    // the loadstring'd chunk is dumped, then rerun it instrumented.
+    const chunkPass = devirtOn && job.obfuscator && job.obfuscator.includes('v14') &&
+                      attempt === 1 && Object.keys(chunks).length === 0;
+    // The blob decode before loadstring is silent and roughly linear in the
+    // protected size: give it room to reach the loadstring call.
+    const decodeStall = Math.max(90, Math.min(900, Math.round(job.source.length / 3000)));
     cfg = {
-      time_budget: args.budget,
+      time_budget: chunkPass ? Math.min(args.budget, 60) : args.budget,
+      stall: chunkPass ? decodeStall : undefined,
       dump_strings: args.strings,
       executor: args.executor,
       skip_protos: skip,
@@ -71,6 +80,26 @@ async function run(job) {
     process.stderr.write(`[*] tracing ${job.input} (run ${attempt})...\n`);
     const res = await runner.run(patched, cfg, chunks);
     body = res.body;
+
+    if (!body && res.partial) {
+      // A killed first pass still printed the loadstring'd chunk(s) before
+      // the stall: recover them from the partial output and rerun patched.
+      const partial = res.partial.replace(/\r\n/g, '\n');
+      const { chunks: partialFound } = harness.takeChunks(harness.takeP2d(partial));
+      let recovered = 0;
+      for (const [key, src] of partialFound) {
+        if (!chunks[key]) {
+          rawChunks[key] = src;
+          chunks[key] = patchChunk(job, src, job.outdir, key);
+          if (spin) chunks[key] = mapper.patchSpin(chunks[key]);
+          recovered++;
+        }
+      }
+      if (recovered > 0) {
+        process.stderr.write(`[*] recovered ${recovered} VM chunk(s) from the interrupted run; instrumenting and re-running\n`);
+        continue;
+      }
+    }
 
     if (!body) {
       runner.finish();

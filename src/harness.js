@@ -155,7 +155,7 @@ async function runOnce(luau, source, cfg, hpath, timeoutSec, keepHarness, chunks
   const harness = buildHarness(source, cfg, chunks);
   fs.writeFileSync(hpath, harness, 'latin1');
 
-  const { body, err } = await _communicate([luau, hpath], timeoutSec * 1000, STALL * 1000);
+  const { body, err } = await _communicate([luau, hpath], timeoutSec * 1000, (cfg.stall || STALL) * 1000);
 
   if (!keepHarness && fs.existsSync(hpath)) {
     try { fs.unlinkSync(hpath); } catch {}
@@ -165,7 +165,7 @@ async function runOnce(luau, source, cfg, hpath, timeoutSec, keepHarness, chunks
   LAST_RAW = stdout + err;
   const m = /\x00ENVLOG-BEGIN\n([\s\S]*?)\x00ENVLOG-END/.exec(stdout);
   if (!m) {
-    return { body: null, err: stdout.slice(-3000) + '\n' + err.slice(-3000) };
+    return { body: null, err: stdout.slice(-3000) + '\n' + err.slice(-3000), partial: stdout };
   }
   let result = m[1];
   for (const hp of [hpath, hpath.replace(/\\/g, '/')]) {
