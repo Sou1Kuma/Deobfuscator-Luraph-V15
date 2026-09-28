@@ -6,7 +6,7 @@ const path = require('path');
 const detectModule = require('./src/detect');
 const driver = require('./src/driver');
 
-const SUPPORTED_EXTENSIONS = ['.lua', '.luau'];
+const SUPPORTED_EXTENSIONS = ['.lua', '.luau', '.txt'];
 
 function parseArgs(argv) {
   const args = {
@@ -22,6 +22,7 @@ function parseArgs(argv) {
     keepPreamble: false,
     timeout: 90,
     budget: 30,
+    jobs: 1,
     maxRuns: 12,
     devirtRounds: 200,
     executor: 'Wave',
@@ -42,6 +43,7 @@ function parseArgs(argv) {
     else if (a === '--timeout') { args.timeout = parseInt(argv[++i], 10); }
     else if (a === '--budget') { args.budget = parseInt(argv[++i], 10); }
     else if (a === '--max-runs') { args.maxRuns = parseInt(argv[++i], 10); }
+    else if (a === '--jobs') { args.jobs = parseInt(argv[++i], 10); }
     else if (a === '--devirt-rounds') { args.devirtRounds = parseInt(argv[++i], 10); }
     else if (a === '--executor') { args.executor = argv[++i]; }
     else if (a === '--input-text') { args.inputText = argv[++i]; }
@@ -222,15 +224,37 @@ async function main() {
   let succeeded = 0;
   let failed = 0;
 
-  for (const file of files) {
-    process.stderr.write(`\n[*] processing ${file}\n`);
-    try {
-      const res = await processFile(file, args);
-      if (res) succeeded++;
-      else failed++;
-    } catch (err) {
-      process.stderr.write(`[!] failed on ${path.basename(file)}: ${err.message || err}\n`);
-      failed++;
+  const jobs = Math.max(1, Math.min(args.jobs || 1, files.length));
+  if (jobs > 1) {
+    process.stderr.write(`[*] processing ${files.length} file(s) with ${jobs} parallel jobs\n`);
+    let next = 0;
+    async function worker() {
+      for (;;) {
+        const i = next++;
+        if (i >= files.length) return;
+        const file = files[i];
+        process.stderr.write(`\n[*] processing ${file}\n`);
+        try {
+          const res = await processFile(file, args);
+          if (res) succeeded++; else failed++;
+        } catch (err) {
+          process.stderr.write(`[!] failed on ${path.basename(file)}: ${err.message || err}\n`);
+          failed++;
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: jobs }, worker));
+  } else {
+    for (const file of files) {
+      process.stderr.write(`\n[*] processing ${file}\n`);
+      try {
+        const res = await processFile(file, args);
+        if (res) succeeded++;
+        else failed++;
+      } catch (err) {
+        process.stderr.write(`[!] failed on ${path.basename(file)}: ${err.message || err}\n`);
+        failed++;
+      }
     }
   }
 

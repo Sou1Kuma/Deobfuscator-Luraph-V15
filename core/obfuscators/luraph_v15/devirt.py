@@ -42,10 +42,52 @@ class PatchLog(dict):
         d, self.dirty = self.dirty, set()
         return d
 
+def _load_json_loose(path):
+    """Load a harness dump and repair trailing commas emitted when a run was
+    cut off mid-dump. The repair is string-aware: commas inside JSON strings
+    are never touched; only a comma whose next non-space token is `}` or `]`
+    is dropped."""
+    import json as _json
+    with open(path, encoding="utf-8") as f:
+        raw = f.read()
+    try:
+        return _json.loads(raw)
+    except ValueError:
+        pass
+    out = []
+    in_str = esc = False
+    n = len(raw)
+    i = 0
+    while i < n:
+        ch = raw[i]
+        if in_str:
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+            out.append(ch)
+        elif ch == ',':
+            j = i + 1
+            while j < n and raw[j] in " \t\r\n":
+                j += 1
+            if j < n and raw[j] in "}]":
+                i += 1
+                continue
+            out.append(ch)
+        else:
+            out.append(ch)
+        i += 1
+    return _json.loads("".join(out))
+
+
 class Dump:
     def __init__(self, path):
-        with open(path, encoding="utf-8") as f:
-            d = json.load(f)
+        d = _load_json_loose(path)
         self.raw = d
         self.tables = {}
         self.lfs = {}
@@ -711,10 +753,25 @@ def _free_env(root, info):
     _bind_value._top = top
     names = set(free.values())
     hits = []
+    wholes = []
     for n in iter_nodes(root):
-        if not (isinstance(n, dict) and n.get("type") == "AstStatAssign"):
+        if not (isinstance(n, dict) and n.get("type") in ("AstStatAssign", "AstStatLocal")):
             continue
-        for var, val in zip(n["vars"], n["values"]):
+        if n.get("type") == "AstStatAssign":
+            pairs = list(zip(n["vars"], n["values"]))
+        else:
+            pairs = list(zip(n["vars"] or [], n["values"] or []))
+        for var, val in pairs:
+            if not isinstance(var, dict) or not isinstance(val, dict):
+                continue
+            if val.get("type") in ("AstExprTable", "AstExprFunction") and var.get("type") == "AstExprLocal" \
+                    and var["local"]["name"] in names:
+                # a whole binding (`local q = { function... }` / `local dec =
+                # function ... end`) of a free local: the initializer builds
+                # the helper inline, so bind it from the AST instead of the
+                # unbound dump closure
+                wholes.append((vmmap.loc(n), var, val))
+                continue
             path = []
             e = vmmap.unwrap_group(var)
             while isinstance(e, dict) and e.get("type") == "AstExprIndexExpr":
@@ -730,11 +787,21 @@ def _free_env(root, info):
             if not path or not isinstance(e, dict) or e.get("type") != "AstExprLocal" \
                     or e["local"]["name"] not in names:
                 continue
-            hits.append((vmmap.loc(n), path[::-1], val))
+            hits.append((vmmap.loc(n), path[::-1], val, vmmap.decl_key(e["local"])))
     env = Scope()
+    whole_tabs = {}
+    whole_fns = {}
+    for (l1, c1, _, _), var, val in sorted(wholes):
+        built = _bind_value(val, env)
+        if isinstance(built, LTable):
+            whole_tabs[vmmap.decl_key(var["local"])] = built
+        elif isinstance(built, LuaFunc):
+            whole_fns[vmmap.decl_key(var["local"])] = built
     helper = LTable()
-    for (l1, c1, _, _), path, val in sorted(hits):
-        tab = helper
+    for (l1, c1, _, _), path, val, hloc in sorted(hits):
+        tab = whole_tabs.get(hloc)
+        if tab is None:
+            tab = helper
         for k in path[:-1]:
             nxt = tab.h.get(S.norm_key(k))
             if not isinstance(nxt, LTable):
@@ -748,8 +815,15 @@ def _free_env(root, info):
         v = _bind_value(val, env)
         if v is not None:
             tab.set(key, v)
+    for k, name in free.items():
+        if k in whole_tabs:
+            env.vars[k] = whole_tabs[k]
+        elif k in whole_fns:
+            env.vars[k] = whole_fns[k]
     if helper.h:
         for k, name in free.items():
+            if k in env.vars:
+                continue
             if name in ("Y", "y") and name in names:
                 env.vars[k] = helper
                 break
@@ -763,7 +837,7 @@ def _free_env(root, info):
                     break
     if top_ltab is not None:
         for k, name in free.items():
-            if name == "C":
+            if name == "C" and k not in env.vars:
                 env.vars[k] = top_ltab
     return env if env.vars else None
 

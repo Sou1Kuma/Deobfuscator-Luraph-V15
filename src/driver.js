@@ -68,6 +68,7 @@ async function run(job) {
     cfg = {
       time_budget: chunkPass ? Math.min(args.budget, 60) : args.budget,
       stall: chunkPass ? decodeStall : undefined,
+      chunks_only: chunkPass,
       dump_strings: args.strings,
       executor: args.executor,
       skip_protos: skip,
@@ -98,6 +99,11 @@ async function run(job) {
       if (recovered > 0) {
         process.stderr.write(`[*] recovered ${recovered} VM chunk(s) from the interrupted run; instrumenting and re-running\n`);
         continue;
+      }
+      if (process.env.DEOB_DEBUG_PARTIAL) {
+        const dump = job.path('.partial_dump.txt');
+        fs.writeFileSync(dump, partial, 'latin1');
+        process.stderr.write(`[!] no chunk in partial (${partial.length} bytes, CHUNK marker: ${partial.includes('\x00CHUNK')}), dumped to ${dump}\n`);
       }
     }
 

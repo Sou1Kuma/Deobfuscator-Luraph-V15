@@ -2390,6 +2390,15 @@ E.loadstring = function(src, chunkname)
 		if not patched and not NEWCHUNKS[key] then
 			NEWCHUNKS[key] = src
 			R.insert(NEWCHUNKS, key)
+			if CFG.chunks_only then
+				-- the driver only wanted the chunk source: dump it now and stop.
+				-- Executing the raw (uninstrumented) VM here would be silent and
+				-- pointless -- the real trace comes from the patched rerun.
+				R.print("\0CHUNK " .. key)
+				R.print((R.gsub(src, ".", function(c) return R.fmt("%02x", R.byte(c)) end)))
+				ABORT_REASON = "chunk captured"
+				R.error(ABORT, 0)
+			end
 		end
 		-- spin watchdog (see E.__SPIN): a chunk the driver never saw (the run
 		-- that would report it hung) gets its dispatch heads patched here
