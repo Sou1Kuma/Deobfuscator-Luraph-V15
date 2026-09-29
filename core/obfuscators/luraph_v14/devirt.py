@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import time
 
 from obfuscators.luraph_v15 import devirt as D
 import luasym as S
@@ -30,6 +31,14 @@ from luasym import NewTable
 from obfuscators.luraph_v14 import vmmap
 
 sys.setrecursionlimit(max(sys.getrecursionlimit(), 60000))
+
+
+class InterpTick:
+    """Statement counter for the helper-decode wall deadline."""
+    n = 0
+
+
+_DECODE_DEADLINE = [None]
 
 vmmap.unwrap_group = vmmap.unwrap
 _mi_orig = vmmap.maker_info
@@ -103,6 +112,10 @@ def _interp_patches():
                 raise
             if a is None or b is None or c is None:
                 return
+        InterpTick.n += 1
+        if _DECODE_DEADLINE[0] is not None and InterpTick.n % 2048 == 0 \
+                and time.monotonic() > _DECODE_DEADLINE[0]:
+            raise Unsupported("helper decode budget exhausted")
         return orig_exec_stmt(self, st, scope)
     S.Interp.exec_stmt = exec_stmt_
 
@@ -134,9 +147,42 @@ if not getattr(D.ProtoLifter, "_v14_origs", None):
 _lf_init, _lf_index, _lf_newindex, _lf_value_of, _lf_call_symbolic = D.ProtoLifter._v14_origs
 
 
+def _bind_unbound_nodes(cap, statics, outer_env):
+    """Attach the static AST body to runtime-captured helpers that never got
+    one: an OpaqueFn with .node is callable by the symbolic interpreter, but
+    the runtime capture value itself is kept (state written before capture
+    stays). Only truly unbound entries are touched."""
+    bound = 0
+    for env_ in outer_env:
+        field = env_.get("field")
+        t = cap.get(field) if field is not None else None
+        static = statics.get(env_.get("decl"))
+        if not isinstance(t, LTable) or not isinstance(static, LTable):
+            continue
+        seen = set()
+        stack = [(t, static)]
+        while stack:
+            rt, st = stack.pop()
+            pair = (id(rt), id(st))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            for k, sv in st.h.items():
+                rv = rt.h.get(S.norm_key(k))
+                if isinstance(rv, OpaqueFn) and rv.node is None \
+                        and isinstance(sv, LuaFunc):
+                    rv.node = sv.node
+                    rv.env = sv.env
+                    bound += 1
+                if isinstance(rv, LTable) and isinstance(sv, LTable):
+                    stack.append((rv, sv))
+    return bound
+
+
 def _prepare_maker_env(self, env, vm, proto):
     """Rebuild the maker's lexical parent scope from the __venvN captures
-    the runtime made where the factory was installed."""
+    the runtime made where the factory was installed; helpers the runtime
+    captured without a body get their static AST bound back onto them."""
     try:
         cap = None
         for _cap in self.dump.protos.values():
@@ -154,6 +200,14 @@ def _prepare_maker_env(self, env, vm, proto):
             field, decl = env_.get("field"), env_.get("decl")
             if field in cap:
                 parent.vars[decl] = cap[field]
+        statics = dict(getattr(vm.info, "static_tables", None) or
+                       (vm.info.get("static_tables") if isinstance(vm.info, dict) else {}) or {})
+        # Deep mode (DEOB_V14_DECODE_BUDGET env): bind the static bodies onto
+        # the captured helpers so the walk executes Luraph's real decode loops.
+        # It reaches far more of the payload (20+ functions on samples that
+        # otherwise lift one) but takes minutes to hours, so it is opt-in.
+        if statics and os.environ.get("DEOB_V14_DEEP"):
+            _bind_unbound_nodes(cap, statics, vm.info.get("outer_env", ()))
         if parent.vars:
             cur = env
             while cur.parent is not None:
@@ -386,6 +440,16 @@ def lift_program(source, protos_path, chunk_paths=(), fetch=None):
     """Lift the payload root, trying every ranked candidate when the first
     lift still looks like Luraph bootstrap scaffolding; the cleanest result
     wins (the reference's alternate-root selection, done engine-side)."""
+    budget = float(os.environ.get("DEOB_V14_DECODE_BUDGET", "300"))
+    old_deadline = _DECODE_DEADLINE[0]
+    _DECODE_DEADLINE[0] = time.monotonic() + budget
+    try:
+        return _lift_program_inner(source, protos_path, chunk_paths, fetch)
+    finally:
+        _DECODE_DEADLINE[0] = old_deadline
+
+
+def _lift_program_inner(source, protos_path, chunk_paths=(), fetch=None):
     candidates = _lift_candidates(protos_path)
     best = None
     best_score = None

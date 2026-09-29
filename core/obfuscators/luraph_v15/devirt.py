@@ -798,10 +798,9 @@ def _free_env(root, info):
         elif isinstance(built, LuaFunc):
             whole_fns[vmmap.decl_key(var["local"])] = built
     helper = LTable()
-    for (l1, c1, _, _), path, val, hloc in sorted(hits):
-        tab = whole_tabs.get(hloc)
-        if tab is None:
-            tab = helper
+    per_decl = {}
+
+    def _fill(tab, path, val):
         for k in path[:-1]:
             nxt = tab.h.get(S.norm_key(k))
             if not isinstance(nxt, LTable):
@@ -811,10 +810,17 @@ def _free_env(root, info):
         key = path[-1]
         if val.get("type") == "AstExprConstantNil":
             tab.h.pop(S.norm_key(key), None)
-            continue
+            return
         v = _bind_value(val, env)
         if v is not None:
             tab.set(key, v)
+
+    for (l1, c1, _, _), path, val, hloc in sorted(hits):
+        tab = whole_tabs.get(hloc)
+        if tab is None:
+            tab = per_decl.setdefault(hloc, LTable())
+            _fill(helper, path, val)
+        _fill(tab, path, val)
     for k, name in free.items():
         if k in whole_tabs:
             env.vars[k] = whole_tabs[k]
@@ -827,6 +833,10 @@ def _free_env(root, info):
             if name in ("Y", "y") and name in names:
                 env.vars[k] = helper
                 break
+    statics = dict(per_decl)
+    for k, t in whole_tabs.items():
+        statics.setdefault(k, t)
+    info["static_tables"] = {k: t for k, t in statics.items() if getattr(t, "h", None)}
     top_ltab = None
     if top is not None:
         for n in iter_nodes(root):
