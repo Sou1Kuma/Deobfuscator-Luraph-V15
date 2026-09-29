@@ -11429,7 +11429,7 @@ if v78 then
 
 					fn12(nil --[[ the caller's registers ]])
 					v57(nil --[[ the caller's registers ]], v[95])
-					error("devirt: value <luasym.RegFile object at 0x0000025E86A2A2D0> in an expression (at 0:4354)")
+					error("devirt: value <luasym.RegFile object at 0x0000022F1DD3A3C0> in an expression (at 0:4354)")
 				else
 					if H_2 >= J_2 then
 						v79 = H_2

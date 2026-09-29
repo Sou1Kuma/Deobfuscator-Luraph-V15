@@ -483,30 +483,29 @@ function applyRootHint(protosJson, body) {
 }
 
 function v14ScaffoldScore(text) {
-  // Structural markers of a lift that still resembles the Luraph VM/runtime
-  // instead of real deobfuscated source.
+  // Density-based scaffold detector: every marker is scaled by the number of
+  // lines, so a large genuine payload lift with some unresolved helper stubs
+  // is kept, while a compact Luraph bootstrap dump is rejected.
   if (!text) return 1e6;
+  const lines = Math.max(1, text.split('\n').length);
   let score = 0;
   const callerRegs = (text.match(/the caller's registers/g) || []).length;
   const runtime = (text.match(/luraph_runtime/g) || []).length;
   const handlers = (text.match(/handlers\[/g) || []).length;
   const stateBranches = (text.match(/\b(?:if|elseif)\s+state\s*==/g) || []).length;
   const denseTable = (text.match(/^\s*\[\d+\]\s*=/gm) || []).length;
-  score += Math.min(80, callerRegs * 5);
-  score += Math.min(60, runtime * 2);
-  score += Math.min(40, handlers * 2);
-  score += Math.min(30, Math.floor(stateBranches / 3));
-  if (denseTable >= 200) score += 30;
-  if (text.includes('local ... = ...')) score += 40;
-  if (text.includes('unresolved Luraph runtime helper') && runtime >= 6) score += 20;
-  // undevirtualized runtime stubs dominating the file
   const stubs = (text.match(/error\("Luraph runtime function/g) || []).length;
-  if (stubs) score += 20 + Math.min(60, stubs * 5);
-  // trace junk / guard errors leaked into the lift
   const traceJunk = (text.match(/^\s*--\s{2,}(?:Script:|.*harness\.luau)/gm) || []).length;
-  if (traceJunk) score += 20 + Math.min(60, traceJunk * 2);
   const guards = (text.match(/error\("devirt:/g) || []).length;
-  if (guards) score += 25 + Math.min(50, guards * 5);
+  if (callerRegs * 50 > lines) score += 40 + Math.min(60, callerRegs);
+  if (runtime * 40 > lines) score += 40 + Math.min(60, runtime);
+  if (handlers * 40 > lines) score += 40 + Math.min(40, handlers * 2);
+  if (stateBranches * 40 > lines) score += 30;
+  if (denseTable * 8 > lines) score += 30;
+  if (text.includes('local ... = ...')) score += 40;
+  if (stubs * 20 > lines) score += 40 + Math.min(60, stubs * 5);
+  if (traceJunk * 10 > lines) score += 30 + Math.min(60, traceJunk * 2);
+  if (guards * 20 > lines) score += 30 + Math.min(50, guards * 5);
   return score;
 }
 

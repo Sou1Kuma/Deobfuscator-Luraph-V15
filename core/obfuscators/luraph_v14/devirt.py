@@ -14,6 +14,7 @@ v14 quirks. The walk, structuring and codegen are shared; what changes:
 * untagged runtime factories called as (protoTable, upvalueTable) become
   ClosureExprs, and non-array concrete tables lower to table literals.
 """
+import json
 import os
 import re
 import sys
@@ -326,7 +327,100 @@ D.ProtoLifter.newindex = _newindex
 D.ProtoLifter.value_of = _value_of
 D.ProtoLifter.call_symbolic = _call_symbolic
 D.ProtoLifter.native_opaque_fn = _native_opaque_fn
-lift_program = D.lift_program
+
+
+def _scaffold_score(text):
+    """Lower is better; mirrors src/driver.js v14ScaffoldScore."""
+    if not text:
+        return 10 ** 6
+    score = 0
+    score += min(80, text.count("the caller's registers") * 5)
+    runtime = text.count("luraph_runtime")
+    score += min(60, runtime * 2)
+    score += min(40, text.count("handlers[") * 2)
+    score += min(30, len(re.findall(r"\b(?:if|elseif)\s+state\s*==", text)) // 3)
+    if len(re.findall(r"^\s*\[\d+\]\s*=", text, re.M)) >= 200:
+        score += 30
+    if "local ... = ..." in text:
+        score += 40
+    stubs = len(re.findall(r'error\("Luraph runtime function', text))
+    if stubs:
+        score += 20 + min(60, stubs * 5)
+    junk = len(re.findall(r"^\s*--\s{2,}(?:Script:|.*harness\.luau)", text, re.M))
+    if junk:
+        score += 20 + min(60, junk * 2)
+    guards = len(re.findall(r'error\("devirt:', text))
+    if guards:
+        score += 25 + min(50, guards * 5)
+    return score
+
+
+_orig_lift_program = D.lift_program
+
+
+def _lift_candidates(protos_path):
+    """Payload-root candidates the runtime call-chain vote ranked, in order."""
+    try:
+        d = D._load_json_loose(protos_path)
+    except Exception:
+        return []
+    return [int(p) for p in (d.get("root_candidates") or [])]
+
+
+def _set_dump_root(protos_path, pid):
+    """Point root_callee at one candidate; returns a backup path to restore."""
+    try:
+        d = D._load_json_loose(protos_path)
+        if str(pid) not in (d.get("protos") or {}):
+            return None
+        old = d.get("root_callee")
+        d["root_callee"] = int(pid)
+        with open(protos_path, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(d, f, separators=(",", ":"))
+        return old
+    except Exception:
+        return None
+
+
+def lift_program(source, protos_path, chunk_paths=(), fetch=None):
+    """Lift the payload root, trying every ranked candidate when the first
+    lift still looks like Luraph bootstrap scaffolding; the cleanest result
+    wins (the reference's alternate-root selection, done engine-side)."""
+    candidates = _lift_candidates(protos_path)
+    best = None
+    best_score = None
+    best_out = None
+    tried = set()
+    order = [None] + candidates[:4]
+    for pid in order:
+        if pid in tried:
+            continue
+        tried.add(pid)
+        old_root = None
+        if pid is not None:
+            old_root = _set_dump_root(protos_path, pid)
+            if old_root is None:
+                continue
+        try:
+            text, stats, reqs, bufs = _orig_lift_program(source, protos_path, chunk_paths, fetch)
+        except Exception:
+            continue
+        finally:
+            if pid is not None and old_root is not None:
+                _set_dump_root(protos_path, old_root)
+        if not text:
+            continue
+        score = _scaffold_score(text)
+        if best_score is None or score < best_score:
+            best, best_score = text, score
+            best_out = (text, stats, reqs, bufs)
+        if best_score <= 0:
+            break
+    if best_out is None:
+        return _orig_lift_program(source, protos_path, chunk_paths, fetch)
+    return best_out
+
+
 collect_requests = D.collect_requests
 program_roots = D.program_roots
 Program = D.Program
