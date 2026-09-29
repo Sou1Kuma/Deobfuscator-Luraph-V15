@@ -499,6 +499,14 @@ function v14ScaffoldScore(text) {
   if (denseTable >= 200) score += 30;
   if (text.includes('local ... = ...')) score += 40;
   if (text.includes('unresolved Luraph runtime helper') && runtime >= 6) score += 20;
+  // undevirtualized runtime stubs dominating the file
+  const stubs = (text.match(/error\("Luraph runtime function/g) || []).length;
+  if (stubs) score += 20 + Math.min(60, stubs * 5);
+  // trace junk / guard errors leaked into the lift
+  const traceJunk = (text.match(/^\s*--\s{2,}(?:Script:|.*harness\.luau)/gm) || []).length;
+  if (traceJunk) score += 20 + Math.min(60, traceJunk * 2);
+  const guards = (text.match(/error\("devirt:/g) || []).length;
+  if (guards) score += 25 + Math.min(50, guards * 5);
   return score;
 }
 

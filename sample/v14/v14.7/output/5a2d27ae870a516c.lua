@@ -1,0 +1,5 @@
+print("[RONI Hub] v1.0.0")
+print("[RONI Hub] https://ronihub.store")
+local StarterGui = game:GetService("StarterGui")
+StarterGui:SetCore("SendNotification", { Text = "This game is not supported.", Title = "RONI Hub", Duration = 5 })
+warn("[RONI Hub] Unsupported game. Visit https://ronihub.store for supported games.")

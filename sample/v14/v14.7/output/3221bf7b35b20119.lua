@@ -1,0 +1,6 @@
+local Players = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
+local Lighting = game:GetService("Lighting")
+game:IsLoaded()
+gethwid()
+Players.LocalPlayer:Kick("This game is not supported by Wealth Hub.")
