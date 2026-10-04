@@ -268,7 +268,7 @@ This project is open-source under the [MIT License](LICENSE).
 
 ## Credits
 Thanks source to **ccjvwsod** on Discord
-This version was rebuilt by me using Node so that multiple Deobf instances can run simultaneously
+This version was rebuilt and update by me using Node so that multiple Deobf instances can run simultaneously
 
 ---
 
